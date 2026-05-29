@@ -1,0 +1,263 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 15,
+              "unit": "minutes"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "subject:\"New Employee\" -subject:Re: -subject:Odp: -subject:Fwd: -subject:AW: newer_than:1d is:unread"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [-1536, 240],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "[credential-id]",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.item.json.textAsHtml || $input.item.json.text || '';\n\n// 1. TEXT CLEANUP\nconst text = html\n  .replace(/<br\\s*\\/?>/gi, '\\n')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\n// 2. GUILLOTINE FUNCTION — extracts value between two phrases\nfunction getVal(startPhrase, endPhrase) {\n  const lowerText = text.toLowerCase();\n  const startIndex = lowerText.indexOf(startPhrase.toLowerCase());\n  if (startIndex === -1) return '';\n  const valStart = startIndex + startPhrase.length;\n  let endIndex = endPhrase\n    ? lowerText.indexOf(endPhrase.toLowerCase(), valStart)\n    : -1;\n  let result = (endIndex === -1)\n    ? text.substring(valStart, valStart + 100)\n    : text.substring(valStart, endIndex);\n  return result.replace(/^[:\\s\\-\\.]+|[:\\s\\-\\.]+$/g, '').trim();\n}\n\n// 3. FIELD EXTRACTION\n// Adjust label names to match your HR email table format.\n// Add or remove fields as needed.\nconst fullName  = getVal('FULL NAME',  'START DATE');\nconst rawDate   = getVal('START DATE', 'POSITION');\nconst position  = getVal('POSITION',   'TEAM');\nconst team      = getVal('TEAM',       'LOCATION');\nconst location  = getVal('LOCATION',   '');\n// Add your custom fields here:\n// const myField = getVal('MY LABEL', 'NEXT LABEL');\n\n// 4. DATE NORMALIZATION (DD.MM.YYYY / DD/MM/YYYY / DD-MM-YYYY → YYYY-MM-DD)\nlet formattedDate = null;\nconst dateMatch = rawDate.match(/(\\d{1,2})[-./](\\d{1,2})[-./](\\d{4})/);\nif (dateMatch) {\n  formattedDate = `${dateMatch[3]}-${dateMatch[2].padStart(2,'0')}-${dateMatch[1].padStart(2,'0')}`;\n}\n\nreturn {\n  fullName:      fullName,\n  startDate:     rawDate,\n  startDateJira: formattedDate,\n  position:      position,\n  team:          team,\n  location:      location\n  // Add your custom fields here\n};"
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000002",
+      "name": "Extract Onboarding Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1296, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('Extract Onboarding Data').item.json.fullName }}",
+              "operation": "isNotEmpty"
+            },
+            {
+              "value1": "={{ $('Extract Onboarding Data').item.json.startDateJira }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000003",
+      "name": "Check if Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [-608, 112]
+    },
+    {
+      "parameters": {
+        "project": {
+          "__rl": true,
+          "value": "[YOUR_PROJECT_ID]",
+          "mode": "id"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "[YOUR_ISSUE_TYPE_ID]",
+          "mode": "id"
+        },
+        "summary": "={{ $('Extract Onboarding Data').item.json.startDate }} | ONBOARDING | {{ $('Extract Onboarding Data').item.json.fullName }}",
+        "additionalFields": {
+          "description": "={{ \"FULL NAME: \" + $('Extract Onboarding Data').item.json.fullName + \"\\n\" +\n\"START DATE: \" + $('Extract Onboarding Data').item.json.startDate + \"\\n\" +\n\"POSITION: \"   + $('Extract Onboarding Data').item.json.position   + \"\\n\" +\n\"TEAM: \"       + $('Extract Onboarding Data').item.json.team       + \"\\n\" +\n\"LOCATION: \"   + $('Extract Onboarding Data').item.json.location }}",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": {
+                  "__rl": true,
+                  "value": "[custom-field-start-date]",
+                  "mode": "id"
+                },
+                "fieldValue": "={{ $('Extract Onboarding Data').item.json.startDateJira }}"
+              }
+            ]
+          },
+          "reporter": {
+            "__rl": true,
+            "value": "[your-jira-user-id]",
+            "mode": "id"
+          }
+        }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000004",
+      "name": "Create Jira Epic",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [-384, 96],
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "[credential-id]",
+          "name": "Jira Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message",
+              "value": "⚠️ MISSING DATA: Could not extract required fields (Full Name or Start Date). Check the table format in the email."
+            },
+            {
+              "name": "status",
+              "value": "Data error"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000005",
+      "name": "Error Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [-384, 256]
+    },
+    {
+      "parameters": {
+        "sendTo": "[your-email]",
+        "subject": "⚠️ Onboarding automation error",
+        "message": "=Hi,\n\nThe automation encountered a problem.\n\nREASON:\n{{ $json.message }}\n\n---\nEmail subject: {{ $('Gmail Trigger').item.json.subject }}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000006",
+      "name": "Send Error Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [-144, 400],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "[credential-id]",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 1,
+        "options": {
+          "jql": "=project = \"[YOUR_PROJECT]\" AND summary ~ \"{{ $json.fullName }}\" AND createdDate >= -7d"
+        }
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [-992, 240],
+      "id": "a1b2c3d4-0001-0001-0001-000000000007",
+      "name": "Get many issues",
+      "alwaysOutputData": true,
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "[credential-id]",
+          "name": "Jira Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1b2c3d4-0001-0001-0001-000000000008",
+              "leftValue": "={{ $json.total }}",
+              "rightValue": "0",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-816, 240],
+      "id": "a1b2c3d4-0001-0001-0001-000000000009",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1b2c3d4-0001-0001-0001-000000000010",
+              "name": "status",
+              "value": "skipped",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-0001-0001-0001-000000000011",
+              "name": "message",
+              "value": "=⛔ DUPLICATE: A ticket for {{ $('Extract Onboarding Data').item.json.fullName }} already exists in the system.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-384, 400],
+      "id": "a1b2c3d4-0001-0001-0001-000000000012",
+      "name": "Error Message1"
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [[{"node": "Extract Onboarding Data", "type": "main", "index": 0}]]
+    },
+    "Extract Onboarding Data": {
+      "main": [[{"node": "Get many issues", "type": "main", "index": 0}]]
+    },
+    "Check if Valid": {
+      "main": [
+        [{"node": "Create Jira Epic", "type": "main", "index": 0}],
+        [{"node": "Error Message", "type": "main", "index": 0}]
+      ]
+    },
+    "Create Jira Epic": {"main": [[]]},
+    "Error Message": {
+      "main": [[{"node": "Send Error Email", "type": "main", "index": 0}]]
+    },
+    "Get many issues": {
+      "main": [[{"node": "If", "type": "main", "index": 0}]]
+    },
+    "If": {
+      "main": [
+        [{"node": "Check if Valid", "type": "main", "index": 0}],
+        [{"node": "Error Message1", "type": "main", "index": 0}]
+      ]
+    },
+    "Error Message1": {
+      "main": [[{"node": "Send Error Email", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "[instance-id]"
+  }
+}
